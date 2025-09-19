@@ -1,0 +1,296 @@
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/include/mbedtls/mbedtls_config.h mbedtls-3.6.4-wiiu/include/mbedtls/mbedtls_config.h
+--- mbedtls-3.6.4.orig/include/mbedtls/mbedtls_config.h	2025-06-30 03:24:52.948094600 -0300
++++ mbedtls-3.6.4-wiiu/include/mbedtls/mbedtls_config.h	2025-09-18 23:08:56.689397909 -0300
+@@ -540,7 +540,7 @@
+  *
+  * Uncomment to use your own hardware entropy collector.
+  */
+-//#define MBEDTLS_ENTROPY_HARDWARE_ALT
++#define MBEDTLS_ENTROPY_HARDWARE_ALT
+ 
+ /**
+  * \def MBEDTLS_AES_ROM_TABLES
+@@ -1206,7 +1206,7 @@
+  *
+  * Uncomment this macro to disable the built-in platform entropy functions.
+  */
+-//#define MBEDTLS_NO_PLATFORM_ENTROPY
++#define MBEDTLS_NO_PLATFORM_ENTROPY
+ 
+ /**
+  * \def MBEDTLS_ENTROPY_FORCE_SHA256
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/CMakeLists.txt mbedtls-3.6.4-wiiu/library/CMakeLists.txt
+--- mbedtls-3.6.4.orig/library/CMakeLists.txt	2025-06-30 03:24:52.963566800 -0300
++++ mbedtls-3.6.4-wiiu/library/CMakeLists.txt	2025-09-18 10:51:52.004717702 -0300
+@@ -42,6 +42,7 @@
+     ecp_curves_new.c
+     entropy.c
+     entropy_poll.c
++    entropy_wiiu.c
+     error.c
+     gcm.c
+     hkdf.c
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/entropy.c mbedtls-3.6.4-wiiu/library/entropy.c
+--- mbedtls-3.6.4.orig/library/entropy.c	2025-06-30 03:24:52.975657200 -0300
++++ mbedtls-3.6.4-wiiu/library/entropy.c	2025-09-18 22:48:11.496487445 -0300
+@@ -200,7 +200,7 @@
+     int ret = MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+     int i;
+     int have_one_strong = 0;
+-    unsigned char buf[MBEDTLS_ENTROPY_MAX_GATHER];
++    _Alignas(_Alignof(uint32_t)) unsigned char buf[MBEDTLS_ENTROPY_MAX_GATHER];
+     size_t olen;
+ 
+     if (ctx->source_count == 0) {
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/entropy_poll.c mbedtls-3.6.4-wiiu/library/entropy_poll.c
+--- mbedtls-3.6.4.orig/library/entropy_poll.c	2025-06-30 03:24:52.975837500 -0300
++++ mbedtls-3.6.4-wiiu/library/entropy_poll.c	2025-09-18 10:46:52.092724174 -0300
+@@ -31,7 +31,7 @@
+ 
+ #if !defined(unix) && !defined(__unix__) && !defined(__unix) && \
+     !defined(__APPLE__) && !defined(_WIN32) && !defined(__QNXNTO__) && \
+-    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__MVS__)
++    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__MVS__) &&
+ #error \
+     "Platform entropy sources only work on Unix and Windows, see MBEDTLS_NO_PLATFORM_ENTROPY in mbedtls_config.h"
+ #endif
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/entropy_wiiu.c mbedtls-3.6.4-wiiu/library/entropy_wiiu.c
+--- mbedtls-3.6.4.orig/library/entropy_wiiu.c	1969-12-31 21:00:00.000000000 -0300
++++ mbedtls-3.6.4-wiiu/library/entropy_wiiu.c	2025-09-18 22:56:15.131000179 -0300
+@@ -0,0 +1,130 @@
++/*
++ *  Entropy source for the Wii U,
++ *
++ *  Copyright Daniel K. O.
++ *  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
++ */
++
++#ifdef __WIIU__
++
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <coreinit/time.h>
++
++#include "entropy_poll.h"
++
++/* http://eel.is/c++draft/rand.util.seedseq#9 */
++static inline
++uint32_t T(uint32_t x)
++{
++    return x ^ (x >> 27);
++}
++
++int mbedtls_hardware_poll(void *data,
++                          unsigned char *output, size_t len, size_t *olen)
++{
++    /*
++     * This is an implementation of std::seed_seq.
++     * See http://eel.is/c++draft/rand.util.seedseq
++     * It can both:
++     * - spread a small number of random numbers over a larger array
++     * - condense a large number of random numbers to a smaller array.
++     */
++    /* We only use the two halfs of OSGetTime() as entropy bits, so s=2, v[2]. */
++    /* If Aroma implements a RandomModule, we could use that instead. */
++    const uint64_t now = OSGetTime();
++    static const size_t s = 2;
++    const uint32_t v[2] = { (uint32_t) (now >> 0), (uint32_t) (now >> 32) };
++
++    size_t n = len / 4;
++    const size_t t = (n >= 623) ? 11
++                   : (n >=  68) ? 7
++                   : (n >=  39) ? 5
++                   : (n >=   7) ? 3
++                   : (n - 1) / 2;
++    const size_t p = (n - t) / 2;
++    const size_t q = p + t;
++    const size_t m = s + 1 > n ? s + 1 : n; /* m = max(s+1, n) */
++    uint32_t r1, r2, r3, r4;
++    uint32_t dummy_output;
++    uint32_t *begin = (uint32_t *) output;
++    size_t k;
++
++    (void)data;
++
++    if (len == 0)
++        return 0;
++
++    if (len < 4) {
++        begin = &dummy_output;
++        n = 1;
++    }
++
++    /*
++     * 9.1: initialization to 0x8b8b8b8b
++     * http://eel.is/c++draft/rand.util.seedseq#9.1
++     */
++    for (k = 0; k < n; ++k)
++        begin[k] = 0x8b8b8b8b;
++
++    /*
++     * 9.2: calculate r1, r2
++     * http://eel.is/c++draft/rand.util.seedseq#9.2
++     */
++#define CALC_R1 r1 = 1664525u * T(begin[k] ^ begin[(k + p) % n] ^ begin[(k + n - 1) % n])
++#define UPDATE_BEGIN do {                       \
++        begin[(k + p) % n] += r1;               \
++        begin[(k + q) % n] += r2;               \
++        begin[k] = r2;                          \
++    }                                           \
++    while (0)
++
++    /* first range: k = 0 */
++    {
++        CALC_R1;
++        r2 = r1 + s;
++        UPDATE_BEGIN;
++    }
++    /* second range: 0 < k <= s */
++    for (k = 1; k <= s; ++k) {
++        CALC_R1;
++        r2 = r1 + k % n + v[k - 1];
++        UPDATE_BEGIN;
++    }
++    /* third range: s < k < m */
++    for (k = s + 1; k < m; ++k) {
++        CALC_R1;
++        r2 = r1 + k % n;
++        UPDATE_BEGIN;
++    }
++#undef CALC_R1
++#undef UPDATE_BEGIN
++
++    /*
++     * 9.3: calculate r3, r4
++     * http://eel.is/c++draft/rand.util.seedseq#9.3
++     */
++    for (k = m; k < m + n; ++k) {
++        r3 = 1566083941u * T(begin[k % n] + begin[(k + p) % n] + begin[(k - 1) % n]);
++        r4 = r3 - (k % n);
++        begin[(k + p) % n] ^= r3;
++        begin[(k + q) % n] ^= r4;
++        begin[k % n] = r4;
++    }
++
++    if (len < 4) {
++        /* begin points to dummy_output, so copy some of its bytes to output */
++        memcpy(output, &dummy_output, len);
++        if (olen)
++            *olen = len;
++        return 0;
++    }
++    /* otherwise we only provide a multiple of 4 bytes of randomness */
++    if (olen)
++        *olen = n * 4;
++    return 0;
++}
++
++#endif /* __WIIU__ */
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/net_sockets.c mbedtls-3.6.4-wiiu/library/net_sockets.c
+--- mbedtls-3.6.4.orig/library/net_sockets.c	2025-06-30 03:24:52.979126000 -0300
++++ mbedtls-3.6.4-wiiu/library/net_sockets.c	2025-09-18 20:53:25.487761190 -0300
+@@ -21,7 +21,8 @@
+ 
+ #if !defined(unix) && !defined(__unix__) && !defined(__unix) && \
+     !defined(__APPLE__) && !defined(_WIN32) && !defined(__QNXNTO__) && \
+-    !defined(__HAIKU__) && !defined(__midipix__)
++    !defined(__HAIKU__) && !defined(__midipix__) && \
++    !defined(__WIIU__)
+ #error "This module only works on Unix and Windows, see MBEDTLS_NET_C in mbedtls_config.h"
+ #endif
+ 
+@@ -72,6 +73,13 @@
+ #include <netdb.h>
+ #include <errno.h>
+ 
++/* Note: WUT should define this macro in sys/socket.h */
++#ifdef __WIIU__
++#ifndef __socklen_t_defined
++#define __socklen_t_defined
++#endif
++#endif
++
+ #define IS_EINTR(ret) ((ret) == EINTR)
+ #define SOCKET int
+ 
+@@ -406,6 +414,7 @@
+             }
+ 
+             memcpy(client_ip, &addr4->sin_addr.s_addr, *cip_len);
++#ifdef AF_INET6
+         } else {
+             struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *) &client_addr;
+             *cip_len = sizeof(addr6->sin6_addr.s6_addr);
+@@ -415,6 +424,7 @@
+             }
+ 
+             memcpy(client_ip, &addr6->sin6_addr.s6_addr, *cip_len);
++#endif
+         }
+     }
+ 
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/platform_util.c mbedtls-3.6.4-wiiu/library/platform_util.c
+--- mbedtls-3.6.4.orig/library/platform_util.c	2025-06-30 03:24:52.982529400 -0300
++++ mbedtls-3.6.4-wiiu/library/platform_util.c	2025-09-18 20:39:28.697210936 -0300
+@@ -257,6 +257,12 @@
+                   ((mbedtls_ms_time_t) (ct.dwHighDateTime) << 32LL))/10000;
+     return current_ms;
+ }
++#elif defined(__WIIU__)
++#include <coreinit/time.h>
++mbedtls_ms_time_t mbedtls_ms_time(void)
++{
++    return OSTicksToMilliseconds(OSGetSystemTime());
++}
+ #else
+ #error "No mbedtls_ms_time available"
+ #endif
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/timing.c mbedtls-3.6.4-wiiu/library/timing.c
+--- mbedtls-3.6.4.orig/library/timing.c	2025-06-30 03:24:52.999512000 -0300
++++ mbedtls-3.6.4-wiiu/library/timing.c	2025-09-18 21:08:26.683123981 -0300
+@@ -15,7 +15,8 @@
+ 
+ #if !defined(unix) && !defined(__unix__) && !defined(__unix) && \
+     !defined(__APPLE__) && !defined(_WIN32) && !defined(__QNXNTO__) && \
+-    !defined(__HAIKU__) && !defined(__midipix__)
++    !defined(__HAIKU__) && !defined(__midipix__) && \
++    !defined(__WIIU__)
+ #error "This module only works on Unix and Windows, see MBEDTLS_TIMING_C in mbedtls_config.h"
+ #endif
+ 
+@@ -28,6 +29,12 @@
+     LARGE_INTEGER start;
+ };
+ 
++#elif defined(__WIIU__)
++#include <coreinit/time.h>
++
++struct _hr_time {
++    OSTime start;
++};
+ #else
+ 
+ #include <unistd.h>
+@@ -81,6 +88,20 @@
+     }
+ }
+ 
++#elif defined(__WIIU__)
++
++unsigned long mbedtls_timing_get_timer(struct mbedtls_timing_hr_time *val, int reset)
++{
++    struct _hr_time *t = (struct _hr_time *) val;
++    if (reset) {
++        t->start = OSGetSystemTime();
++        return 0;
++    } else {
++        OSTime now = OSGetSystemTime();
++        return (unsigned long)OSTicksToMilliseconds(now - t->start);
++    }
++}
++
+ #else /* _WIN32 && !EFIX64 && !EFI32 */
+ 
+ unsigned long mbedtls_timing_get_timer(struct mbedtls_timing_hr_time *val, int reset)
