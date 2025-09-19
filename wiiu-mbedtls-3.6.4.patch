@@ -1,6 +1,6 @@
 diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/include/mbedtls/mbedtls_config.h mbedtls-3.6.4-wiiu/include/mbedtls/mbedtls_config.h
 --- mbedtls-3.6.4.orig/include/mbedtls/mbedtls_config.h	2025-06-30 03:24:52.948094600 -0300
-+++ mbedtls-3.6.4-wiiu/include/mbedtls/mbedtls_config.h	2025-09-18 23:08:56.689397909 -0300
++++ mbedtls-3.6.4-wiiu/include/mbedtls/mbedtls_config.h	2025-09-19 03:56:25.275071905 -0300
 @@ -540,7 +540,7 @@
   *
   * Uncomment to use your own hardware entropy collector.
@@ -19,9 +19,39 @@ diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.or
  
  /**
   * \def MBEDTLS_ENTROPY_FORCE_SHA256
+@@ -2156,7 +2156,7 @@
+  *
+  * Uncomment this to allow your own alternate threading implementation.
+  */
+-//#define MBEDTLS_THREADING_ALT
++#define MBEDTLS_THREADING_ALT
+ 
+ /**
+  * \def MBEDTLS_THREADING_PTHREAD
+@@ -3749,7 +3749,7 @@
+  *
+  * Enable this layer to allow use of mutexes within Mbed TLS
+  */
+-//#define MBEDTLS_THREADING_C
++#define MBEDTLS_THREADING_C
+ 
+ /**
+  * \def MBEDTLS_TIMING_C
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/include/mbedtls/threading_alt.h mbedtls-3.6.4-wiiu/include/mbedtls/threading_alt.h
+--- mbedtls-3.6.4.orig/include/mbedtls/threading_alt.h	1969-12-31 21:00:00.000000000 -0300
++++ mbedtls-3.6.4-wiiu/include/mbedtls/threading_alt.h	2025-09-19 05:27:35.305239087 -0300
+@@ -0,0 +1,8 @@
++#ifndef MBEDTLS_THREADING_ALT_H
++#define MBEDTLS_THREADING_ALT_H
++
++#include <coreinit/mutex.h>
++
++typedef OSMutex mbedtls_threading_mutex_t;
++
++#endif
 diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/CMakeLists.txt mbedtls-3.6.4-wiiu/library/CMakeLists.txt
 --- mbedtls-3.6.4.orig/library/CMakeLists.txt	2025-06-30 03:24:52.963566800 -0300
-+++ mbedtls-3.6.4-wiiu/library/CMakeLists.txt	2025-09-18 10:51:52.004717702 -0300
++++ mbedtls-3.6.4-wiiu/library/CMakeLists.txt	2025-09-19 05:27:53.807536777 -0300
 @@ -42,6 +42,7 @@
      ecp_curves_new.c
      entropy.c
@@ -42,22 +72,10 @@ diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.or
      size_t olen;
  
      if (ctx->source_count == 0) {
-diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/entropy_poll.c mbedtls-3.6.4-wiiu/library/entropy_poll.c
---- mbedtls-3.6.4.orig/library/entropy_poll.c	2025-06-30 03:24:52.975837500 -0300
-+++ mbedtls-3.6.4-wiiu/library/entropy_poll.c	2025-09-18 10:46:52.092724174 -0300
-@@ -31,7 +31,7 @@
- 
- #if !defined(unix) && !defined(__unix__) && !defined(__unix) && \
-     !defined(__APPLE__) && !defined(_WIN32) && !defined(__QNXNTO__) && \
--    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__MVS__)
-+    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__MVS__) &&
- #error \
-     "Platform entropy sources only work on Unix and Windows, see MBEDTLS_NO_PLATFORM_ENTROPY in mbedtls_config.h"
- #endif
 diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/entropy_wiiu.c mbedtls-3.6.4-wiiu/library/entropy_wiiu.c
 --- mbedtls-3.6.4.orig/library/entropy_wiiu.c	1969-12-31 21:00:00.000000000 -0300
-+++ mbedtls-3.6.4-wiiu/library/entropy_wiiu.c	2025-09-18 22:56:15.131000179 -0300
-@@ -0,0 +1,130 @@
++++ mbedtls-3.6.4-wiiu/library/entropy_wiiu.c	2025-09-19 03:47:53.869699150 -0300
+@@ -0,0 +1,133 @@
 +/*
 + *  Entropy source for the Wii U,
 + *
@@ -181,9 +199,12 @@ diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.or
 +            *olen = len;
 +        return 0;
 +    }
-+    /* otherwise we only provide a multiple of 4 bytes of randomness */
++    if (len % 4 > 0) {
++        // len was not a multiple of 4, just pad it
++        memset(output + n, 0x2a, len % 4);
++    }
 +    if (olen)
-+        *olen = n * 4;
++        *olen = len;
 +    return 0;
 +}
 +
@@ -247,6 +268,64 @@ diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.or
  #else
  #error "No mbedtls_ms_time available"
  #endif
+diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/threading.c mbedtls-3.6.4-wiiu/library/threading.c
+--- mbedtls-3.6.4.orig/library/threading.c	2025-06-30 03:24:52.999363200 -0300
++++ mbedtls-3.6.4-wiiu/library/threading.c	2025-09-19 05:43:56.711029177 -0300
+@@ -129,6 +129,54 @@
+ int (*mbedtls_mutex_lock)(mbedtls_threading_mutex_t *) = threading_mutex_fail;
+ int (*mbedtls_mutex_unlock)(mbedtls_threading_mutex_t *) = threading_mutex_fail;
+ 
++
++#ifdef __WIIU__
++static void threading_mutex_init_wiiu(mbedtls_threading_mutex_t *p_mutex)
++{
++    if (p_mutex) {
++        memset(p_mutex, 0, sizeof *p_mutex);
++        OSInitMutex(p_mutex);
++    }
++}
++
++static void threading_mutex_free_wiiu(mbedtls_threading_mutex_t *p_mutex)
++{
++    if (p_mutex)
++        memset(p_mutex, 0, sizeof *p_mutex);
++}
++
++static int threading_mutex_lock_wiiu(mbedtls_threading_mutex_t *p_mutex)
++{
++    if (!p_mutex)
++        return MBEDTLS_ERR_THREADING_BAD_INPUT_DATA;
++    OSLockMutex(p_mutex);
++    return 0;
++}
++
++static int threading_mutex_unlock_wiiu(mbedtls_threading_mutex_t *p_mutex)
++{
++    if (!p_mutex)
++        return MBEDTLS_ERR_THREADING_BAD_INPUT_DATA;
++    OSUnlockMutex(p_mutex);
++    return 0;
++}
++
++__attribute__ (( __constructor__ ))
++static void mbedtls_threading_wiiu_init(void)
++{
++    mbedtls_threading_set_alt(threading_mutex_init_wiiu,
++                              threading_mutex_free_wiiu,
++                              threading_mutex_lock_wiiu,
++                              threading_mutex_unlock_wiiu);
++}
++
++__attribute__ (( __destructor__ ))
++static void mbedtls_threading_wiiu_fini(void)
++{
++    mbedtls_threading_free_alt();
++}
++#endif /* __WIIU__ */
++
+ /*
+  * Set functions pointers and initialize global mutexes
+  */
 diff -Naur -x build -x __pycache__ -x compile_flags.txt -x '*~' mbedtls-3.6.4.orig/library/timing.c mbedtls-3.6.4-wiiu/library/timing.c
 --- mbedtls-3.6.4.orig/library/timing.c	2025-06-30 03:24:52.999512000 -0300
 +++ mbedtls-3.6.4-wiiu/library/timing.c	2025-09-18 21:08:26.683123981 -0300
